@@ -2,6 +2,7 @@ import discord
 import os
 import asyncio
 import time
+from pytube import YouTube
 import youtube_dl
 from youtube_dl import YoutubeDL
 from discord.ext import commands
@@ -16,21 +17,20 @@ ffmpegOptions = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn'}
 ydlOptions = {"format":"bestaudio"}
+is_paused = False
 
 def play_next_song(ctx):
     voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
-    queue.pop(0) #Removes the extra queue of the very first song
     #Queue is not empty 
     if len(queue) >= 1:
         newSong = queue.pop(0)
-        source = discord.FFmpegOpusAudio(newSong)
-        asyncio.run_coroutine_threadsafe(ctx.send("Now playing..." + newSong),client.loop)
+        if str(newSong).endswith(".mp3"): 
+            source = discord.FFmpegOpusAudio(newSong)
+            asyncio.run_coroutine_threadsafe(ctx.send("Now playing..." + newSong),client.loop)
+        else: 
+            source = newSong
+            asyncio.run_coroutine_threadsafe(ctx.send("Now playing..." + str(source)),client.loop)
         voice.play(source,after=lambda f: play_next_song(ctx))
-    else:
-        time.sleep(15)
-        if not voice.is_playing():
-            asyncio.run_coroutine_threadsafe(voice.disconnect(), client.loop)
-            asyncio.run_coroutine_threadsafe(ctx.send("No more songs in queue."),client.loop)
 
 @client.event
 async def on_ready():
@@ -63,37 +63,33 @@ async def play(ctx,url=None):
     if not voice.is_playing() and len(queue) == 0 and url == None:
         #Checks if the user uploaded a file
         if len(ctx.message.attachments) == 0:
-            await ctx.send("No file was attached")
+            await ctx.send("No file was attached/no link was provided")
         else:
             filename = ctx.message.attachments[0].filename
             await ctx.message.attachments[0].save(cwd + '/' + filename)
-        source = discord.FFmpegOpusAudio(filename)
-        queue.append(filename)
-        await ctx.send("Now playing... " + filename)
-        voice.play(source,after=lambda f: play_next_song(ctx))
+            source = discord.FFmpegOpusAudio(filename)
+            await ctx.send("Now playing... " + filename)
+            voice.play(source,after=lambda f: play_next_song(ctx))
     #If the user sent a youtube link
     elif url != None and len(queue) == 0 and not voice.is_playing():
         with youtube_dl.YoutubeDL(ydlOptions) as ydl:
             info = ydl.extract_info(url,download=False)
-            title = info['track'] + ' by ' + info['artist']
             newUrl = info['formats'][0]['url']
             source = await discord.FFmpegOpusAudio.from_probe(newUrl,**ffmpegOptions)
-            queue.append(str(source))
-            await ctx.send("Now playing... " + title)
+            await ctx.send("Now playing... " + YouTube(url).title)
             voice.play(source,after=lambda f: play_next_song(ctx))
-    elif url != None and len(queue) > 0: 
+    elif url != None and len(queue) >= 0 and not is_paused: 
         with youtube_dl.YoutubeDL(ydlOptions) as ydl:
             info = ydl.extract_info(url,download=False)
             newUrl = info['formats'][0]['url']
-            title = info['track'] + ' by ' + info['artist']
             source = await discord.FFmpegOpusAudio.from_probe(newUrl,**ffmpegOptions)
-            queue.append(str(source))    
-            await ctx.send(title + " has been added to the queue")
+            queue.append(source)    
+            await ctx.send(YouTube(url).title + " has been added to the queue")
     #Add the audio file to the queue
     else:
         filename = ctx.message.attachments[0].filename
         queue.append(filename)
-        await ctx.send(filename + " has been added to  the queue")
+        await ctx.send(filename + " has been added to the queue")
 @client.command()
 async def pause(ctx):
 #Two cases: music is playing or no music is playing 
@@ -102,8 +98,11 @@ async def pause(ctx):
         await ctx.send("No audio being played")
     elif voice.is_playing():
         voice.pause()
-    else:
+        is_paused = True
+    elif not voice.is_playing() and len(queue) > 0:
         await ctx.send("You can't pause a paused song")
+    else:
+        await ctx.send("Nothing is playing")
 @client.command()
 async def resume(ctx):
     voice = discord.utils.get(client.voice_clients,guild=ctx.guild)
@@ -111,8 +110,20 @@ async def resume(ctx):
         await ctx.send("No audio being played")
     elif voice.is_paused():
         voice.resume()
-    else:
+        is_paused = False
+    elif not voice.is_paused() and len(queue) > 0:
         await ctx.send("You can't resume a playing song")
+    else:
+        await ctx.send("Nothing is playing")
+@client.command()
+async def skip(ctx):
+    if len(queue) >= 0:
+        voice = discord.utils.get(client.voice_clients,guild=ctx.guild)
+        voice.stop()
+        play_next_song(ctx)
+    else:
+        await ctx.send("The queue is empty")
+
 with open("password.txt", "r") as token_file:
     TOKEN = token_file.read()
     print("Token file read")
